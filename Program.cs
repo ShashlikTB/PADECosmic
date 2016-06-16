@@ -495,7 +495,14 @@ namespace PADECosmicRay
             System.Console.ReadLine();
 
             //Make sure we're disarmed before quitting
-            RC_client.Disarm();
+			//We lock here just in case we're running receive at the same time we try to quit
+			lock(receiveLock) 
+			{ 
+
+
+            	RC_client.Disarm();
+
+			}
 
 
 
