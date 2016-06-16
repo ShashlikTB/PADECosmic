@@ -224,6 +224,7 @@ namespace PADECosmicRay
                 fs.Flush();
                 fs.Close();
                 Console.WriteLine("Writing Complete");
+				fileCount++; 
             }
             catch (Exception e)
             {
