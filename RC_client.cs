@@ -7,7 +7,7 @@ using System.Net.Sockets;
 using System.IO;
 
 
-namespace PADECosmicRay
+namespace H4PADE
 {
     public static class RC_client
     {

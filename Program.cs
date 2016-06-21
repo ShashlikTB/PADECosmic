@@ -7,9 +7,9 @@ using System.Collections.Generic;
 using System.Threading;
 using Mono.Options;
 
-using H4States = PADECosmicRay.H4.H4States;  
+using H4States = H4PADE.H4.H4States;  
 
-namespace PADECosmicRay
+namespace H4PADE
 {
     
 

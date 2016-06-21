@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 
-namespace PADECosmicRay
+namespace H4PADE
 {
 	class PADE
 	{

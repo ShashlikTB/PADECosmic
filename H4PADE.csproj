@@ -5,8 +5,8 @@
     <Platform Condition=" '$(Platform)' == '' ">x86</Platform>
     <ProjectGuid>{D7F863B5-5214-40FC-AFF4-F434A2650977}</ProjectGuid>
     <OutputType>Exe</OutputType>
-    <RootNamespace>PADECosmicRay</RootNamespace>
-    <AssemblyName>PADECosmicRay</AssemblyName>
+    <RootNamespace>H4PADE</RootNamespace>
+    <AssemblyName>H4PADE</AssemblyName>
     <ProductVersion>8.0.30703</ProductVersion>
     <SchemaVersion>2.0</SchemaVersion>
   </PropertyGroup>
