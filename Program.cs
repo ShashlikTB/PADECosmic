@@ -7,99 +7,18 @@ using System.Collections.Generic;
 using System.Threading;
 using Mono.Options;
 
+using H4States = PADECosmicRay.H4.H4States;  
 
 namespace PADECosmicRay
 {
-    class PADE
-    {
-
-
-
-        public PADE()
-        {
-
-            pades = new List<padeStatus>();
-
-
-        }
-
-
-
-
-
-        public void parseStatusLine(string status)
-        {
-
-            char[] delims = { ' ' };
-            var split = status.Trim().Split(delims);
-
-            if (((split.Length - 1) % 2) != 0)
-            {
-                Console.WriteLine("Bad status message");
-                return;
-            }
-
-            npades = Convert.ToInt32(split[0]);
-            if (npades == 0)
-            {
-                Console.WriteLine("NPades == 0!");
-                return;
-            }
-
-            int i = 0;
-            while (i < npades)
-            {
-                var stat = new padeStatus();
-
-                stat.padeType = split[(i * 9) + 1];
-                stat.padeID = Convert.ToInt32(split[(i * 9) + 2]);
-                stat.status = Convert.ToInt32(split[(i * 9) + 3], 16);
-
-                //byte reg =  Byte.Parse (split [(i * 9) + 2], NumberStyles.AllowHexSpecifier);
-
-                var armed = Convert.ToInt32(split[(i * 9) + 4], 16);
-                if (armed > 0)
-                    stat.armed = true;
-                stat.triggerCount = Convert.ToInt32(split[(i * 9) + 5], 16);
-                stat.memoryError = Convert.ToInt32(split[(i * 9) + 6], 16);
-
-                stat.currentTrigger = Convert.ToInt32(split[(i * 9) + 7], 16);
-                stat.padeTemperature = Convert.ToInt32(split[(i * 9) + 8], 16);
-                stat.sibTemperature = Convert.ToInt32(split[(i * 9) + 9], 16);
-                i += 1;
-                pades.Add(stat);
-            }
-
-        }
-
-        public class padeStatus
-        {
-            public string padeType;
-            public int padeID;
-            public int status;
-            public bool armed;
-            public int triggerCount;
-            public int memoryError;
-            public int currentTrigger;
-            public int padeTemperature;
-            public int sibTemperature;
-
-
-        }
-
-        public List<padeStatus> pades;
-        public int npades;
-
-    };
-
-
-
+    
 
 
     class MainClass
     {
         private static string fileName;
         private static int currentRun;
+		private static int currentSpill; 
         private static bool readingOutput;
         private static object receiveLock;
         private static IPEndPoint e;
@@ -107,12 +26,15 @@ namespace PADECosmicRay
         private static System.Timers.Timer cbTimer;
         private static bool armed;
        
+		private static bool readyForTriggers; 
+		private static bool startedRun; 
+
         public static int timeOut = 10;
         private static int fileCount = 0;
         private static Thread recvThread;
         private static uint triggerLimit = 500;
 
-        
+		private static H4 h4comm; 
         public static LinkedList<Event> Events;
         public static string[] spill_status;
 
@@ -236,6 +158,7 @@ namespace PADECosmicRay
 
         static void processPackets(LinkedList<Byte[]> packets)
         {
+	   
             if (packets.Count == 0) return;
             Event evt = new Event();
             bool event_complete = false;
@@ -374,17 +297,150 @@ namespace PADECosmicRay
             Console.WriteLine("-p, --port, port for RC Client");
             Console.WriteLine("-f, --folder, outputFolder for data files.");
             Console.WriteLine("-t, --count, TriggerCount limit.");
+			Console.WriteLine("--h4daq, Enable h4daq mode.");
+			Console.WriteLine("--h4host, H4 Host");
+			Console.WriteLine("--h4CmdP, H4 Command Port");
+			Console.WriteLine("--h4DRP, H4 Data Ready Port");
 
         }
 
+		public static void statusUpdate(object daq, string msg, byte[] rawstatus) { 
+			
+			string msgBase = msg.Trim(); 
+
+			H4States state; 
+
+			if (msgBase.Contains("STARTRUN")) {
+				// Start of Run
+				state = H4States.STARTRUN; 
+				//string runNumber = msgBase.Substring(8); 
+				MemoryStream mStream = new MemoryStream(); 
+				//StreamWriter write = new StreamWriter(mStream); 
+				BinaryWriter write = new BinaryWriter(mStream);
+				for(int i =9; i < rawstatus.Length; i++) { 
+					write.Write(rawstatus[i]);
+				}
+				write.Write(0x0);
+				write.Flush(); 
+				mStream.Position = 0; 
+				var reader = new BinaryReader(mStream);  
+
+				currentRun = reader.ReadInt32(); 
+				startedRun = true; 
+
+				currentSpill = 0; 
+				Console.WriteLine ("===========================");
+				Console.WriteLine("Run number is {0}", currentRun); 
+				Console.WriteLine ("===========================");
+				Console.WriteLine (" ");
+
+			}
+			else if (Enum.TryParse(msgBase, true, out state)) {
+				System.Console.WriteLine("  0mq statusUpdate: Parsed {0} to: {1}", msgBase, state.ToString()); 
+			}
+			else {
+
+				System.Console.WriteLine("Failed to Parse {0}", msgBase); 
+				state = H4States.NOP; 
+			}
+
+			var currentState = state; 
+
+			if (!readingOutput && startedRun) {
+				switch (currentState) { 
+				case H4States.WWE: 
+					{
+						System.Console.WriteLine ("Spill {0} starts in 1 second", currentSpill);
+						readyForTriggers = true; 
+						RC_client.Arm (); 
+						break; 
+					}
+				case H4States.WE:
+					{
+						//Should already be armed and ready 
+						//Add some update to the main window to indicate we're in a spill
+						if (!readingOutput && !readyForTriggers) {
+							RC_client.Arm (); 
+							readyForTriggers = true; 
+						}
+						h4comm.sendREADY ();
+						System.Console.WriteLine ("WE");	
+						break;
+					}
+				case H4States.EE:
+					{ 
+					
+						System.Console.WriteLine ("EE");
+						if (readyForTriggers) { 
+							currentSpill++;
+							System.Console.WriteLine ("Disarming PADEs and reading out data"); 
+							RC_client.Disarm (); 
+							readyForTriggers = false; 
+							recvThread = new Thread (new ThreadStart (receiveData)); 
+							recvThread.Start (); 
+							Thread.Sleep (1);
+							RC_client.ReadAll (); 
+							Thread.Sleep (15);
+
+						}
+						//System.Console.WriteLine ("Waiting for spill {0}", spillCounter);
+						break; 
+					}
+
+				case H4States.SPILLCOMPL:
+					{ 
+						System.Console.WriteLine ("Spill Complete");
+					
+						break; 
+					}
+
+				case H4States.NOP:
+					{
+						break; 
+					}
+				case H4States.ENDRUN:
+					{ 
+						Console.WriteLine ("===========================");
+						Console.WriteLine ("Run {0} has ended, closing datafile", currentRun.ToString ()); 
+						Console.WriteLine ("===========================");
+						Console.WriteLine ("");
+
+						break; 
+
+					}
+				case H4States.DIE:
+					{ 
+						Console.WriteLine ("===========================");
+						Console.WriteLine ("Run {0} has died, closing datafile", currentRun.ToString ()); 
+						Console.WriteLine ("===========================");
+						Console.WriteLine ("");
+
+						break; 
+
+					}
+				default: 
+					break;
+				}
+			}
+		}
+
+	
+
         public static void Main(string[] args)
         {
+
+
+
             bool show_help = false;
             var host = "192.168.0.225";
             uint port = 23;
             //string outputFolder = "/home/daquser/DAQ";
 			string outputFolder = ".";
 			string fileBase = "capture_cosmic";
+			bool H4enabled = false; 
+			Int16 h4CmdPort = 6004; 
+			Int16 h4DRPort = 6000; 
+			string h4host = "http://pcethtb2.cern.ch"; 
             var p = new OptionSet() {
 				{"r|prefix=", "Output file prefix",
 					v => { if (v != null) fileBase = v; }
@@ -403,7 +459,19 @@ namespace PADECosmicRay
                 },
                 {"t|count=", "Trigger Count Limit.",
                 (uint v) => { if (v != 0) triggerLimit = v; }
-                }
+                },
+				{"h4daq", "Enable H4 DAQ Mode", 
+					v => {  H4enabled = true; }
+				},
+				{"h4host=", "H4 Host", 
+					v => {if ( v != null) h4host = v; }
+				},
+				{"h4CmdP", "H4 Command Port", 
+					(Int16 v) => {if ( v != 0) h4CmdPort = v; }
+				},
+				{"h4DRP", "H4 Data Ready Port", 
+					(Int16 v) => {if (v != 0) h4DRPort = v; }
+				}
             };
 
 
@@ -429,6 +497,7 @@ namespace PADECosmicRay
 
 
             Console.WriteLine("host: {0}, port: {1}", host, port.ToString());
+
 
 
 
@@ -481,14 +550,34 @@ namespace PADECosmicRay
                 return;
             }
 
-            Console.WriteLine("Waiting for {0} triggers.", triggerLimit.ToString());
+			dataReceiver = new UdpClient(endPoint);
+			receiveLock = new object();
 
-            dataReceiver = new UdpClient(endPoint);
-            receiveLock = new object();
-            cbTimer = new System.Timers.Timer(1000);
-           
-            cbTimer.Elapsed += statusCheck;
-            cbTimer.Enabled = true;
+
+
+			if (H4enabled) { 
+				Console.WriteLine("Starting H4 DAQ Thread"); 
+				Console.WriteLine("H4Host: {0}, H4CmdPort: {1}, H4DRPort: {2}", h4host, h4CmdPort, h4DRPort); 
+
+			
+				h4comm = new H4(h4host, h4CmdPort, h4DRPort); 
+				h4comm.spillUpdated += new H4.updatedSpillStatusHandler(h4comm.printUpdate); 
+				h4comm.spillUpdated += statusUpdate; 
+				h4comm.connectToH4(); 
+
+
+			}
+			else {
+				Console.WriteLine("Cosmic Trigger Mode"); 
+
+            	Console.WriteLine("Waiting for {0} triggers.", triggerLimit.ToString());
+
+            
+				cbTimer = new System.Timers.Timer(1000);
+            	cbTimer.Elapsed += statusCheck;
+            	cbTimer.Enabled = true;
+
+			}
 
             System.Console.WriteLine("Press any key to quit");
 
@@ -504,9 +593,13 @@ namespace PADECosmicRay
 
 			}
 
-
+	
 
 
         }
+
+
+
+	
     }
 }
